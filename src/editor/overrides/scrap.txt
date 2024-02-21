@@ -1,0 +1,460 @@
+package editor;
+
+import dream.nodes.Node;
+import dream.managers.NodeManager;
+import dream.managers.AssetsManager;
+import dream.tools.SystemIcon;
+import dream.tools.contain.Containable;
+import dream.tools.contain.Contained;
+import dream.tools.contain.Container;
+import editor.windows.Modal;
+import editor.windows.Notification;
+import imgui.ImGui;
+import imgui.ImVec2;
+import imgui.flag.ImGuiCol;
+import imgui.flag.ImGuiSelectableFlags;
+import imgui.flag.ImGuiTreeNodeFlags;
+import imgui.type.ImString;
+
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+
+public class WindowManager
+{
+
+    protected static Modal<Node> addNodes()
+    {
+        return  new Modal<>("Add Node", "Add a new node to your scene!")
+        {
+            private Container<String> root = new Container<>(Node.getNodeTree());
+            private String selectedNodeDescription = null;
+            private String selectedNode = null;
+            private final ImString filteredText = new ImString();
+            private final int defaultTreeFlags = ImGuiTreeNodeFlags.OpenOnArrow
+                | ImGuiTreeNodeFlags.OpenOnDoubleClick
+                | ImGuiTreeNodeFlags.DefaultOpen;
+
+            private void filterNodes()
+            {
+                this.root.clear();
+                this.root = searchNode(Node.getNodeTree(), this.filteredText.get());
+            }
+
+            private Container<String> searchNode(Container<String> root, String filter)
+            {
+                Container<String> result = new Container<>(root.getName(), root.getValue());
+                for(Containable<String> containable : root.getItems())
+                {
+                    if(containable instanceof Container<String> container)
+                    {
+                        Container<String> filtered = searchNode(container, filter);
+                        if(filtered.size() > 0)
+                            result.add(filtered);
+                    }
+                    else if(containable instanceof Contained<String> contained)
+                    {
+                        if(contained.getName().contains(filter))
+                            result.add(contained);
+                    }
+                }
+                return result;
+            }
+
+            private void showRootNode()
+            {
+                if(this.root.size() == 0)
+                {
+                    String description = "Invalid Search Parameters";
+                    ImVec2 size = ImGui.getContentRegionAvail();
+                    ImVec2 textSize = new ImVec2();
+                    ImGui.calcTextSize(textSize, description);
+                    ImGui.setCursorPos((size.x - textSize.x) * 0.5f, size.y * 0.5f);
+                    ImGui.text(description);
+                    this.selectedNode = null;
+                    return;
+                }
+
+                int flags = this.defaultTreeFlags;
+                boolean isSelected = this.root.getName().equals(this.selectedNode);
+                if (isSelected)
+                    flags |= ImGuiTreeNodeFlags.Selected;
+
+                boolean hasChildren = this.root.size() > 0;
+                if(!hasChildren)
+                    flags |= ImGuiTreeNodeFlags.Leaf | ImGuiTreeNodeFlags.NoTreePushOnOpen | ImGuiTreeNodeFlags.Bullet;
+
+                boolean nodeOpen = ImGui.treeNodeEx(root.hashCode(), flags, root.getName());
+                if (ImGui.isItemClicked() && !ImGui.isItemToggledOpen())
+                {
+                    this.selectedNode = root.getName();
+                    this.selectedNodeDescription = root.getValue();
+                }
+
+                if(hasChildren && nodeOpen)
+                {
+                    showFilteredNodes(root.getItems());
+                    ImGui.treePop();
+                }
+            }
+
+            private void showFilteredNodes(List<Containable<String>> nodes)
+            {
+                for (int i = 0; i < nodes.size(); i++)
+                {
+                    int flags = defaultTreeFlags;
+                    Containable<String> currentNode = nodes.get(i);
+                    boolean isSelected = currentNode.getName().equals(this.selectedNode);
+                    if (isSelected)
+                        flags |= ImGuiTreeNodeFlags.Selected;
+
+                    Container<String> container = null;
+                    boolean isContainer = currentNode.isContainer();
+                    boolean hasChildren = isContainer && (container = (Container<String>) currentNode).getItems().size() > 0;
+
+                    if(!hasChildren)
+                        flags |= ImGuiTreeNodeFlags.Leaf | ImGuiTreeNodeFlags.NoTreePushOnOpen | ImGuiTreeNodeFlags.Bullet;
+
+                    boolean nodeOpen = ImGui.treeNodeEx(i, flags, currentNode.getName());
+                    if (ImGui.isItemClicked() && !ImGui.isItemToggledOpen())
+                    {
+                        this.selectedNode = currentNode.getName();
+                        this.selectedNodeDescription = currentNode.getValue();
+                    }
+
+                    if(hasChildren && nodeOpen)
+                    {
+                        showFilteredNodes(container.getItems());
+                        ImGui.treePop();
+                    }
+                }
+            }
+
+            @Override
+            public void drawTopSheet()
+            {
+                ImVec2 size = ImGui.getContentRegionAvail();
+                ImGui.pushItemWidth(size.x);
+                ImGui.inputTextWithHint("##label", "Search Node", this.filteredText);
+                ImGui.spacing();
+                ImGui.popItemWidth();
+            }
+
+            @Override
+            public float getBottomHeight()
+            {
+                return 100.0f;
+            }
+
+            @Override
+            public void drawContent()
+            {
+                ImGui.pushItemWidth(this.childSize.x - 10.0f);
+                filterNodes();
+                showRootNode();
+                this.selection = NodeManager.createNode(this.selectedNode);
+                ImGui.popItemWidth();
+            }
+
+            @Override
+            public void drawBottomSheet()
+            {
+                ImGui.text("DESCRIPTION");
+                ImGui.spacing();
+
+                if(this.selectedNodeDescription != null)
+                    ImGui.text(this.selectedNodeDescription);
+
+                ImGui.spacing();
+
+                if (ImGui.button("Cancel", 120.0f, 0.0f))
+                {
+                    this.listener.onCancelButton();
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.sameLine();
+
+                if (ImGui.button("Add Node", 120.0f, 0.0f))
+                {
+                    this.listener.onAcceptButton();
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.setItemDefaultFocus();
+            }
+
+        };
+    }
+
+    protected static Modal<String> newProject()
+    {
+        return new Modal<>("New Project", "Create a new dream project!")
+        {
+
+            @Override
+            public float getBottomHeight()
+            {
+                return 50.0f;
+            }
+
+            @Override
+            public void drawTopSheet()
+            {
+
+            }
+
+            @Override
+            public void drawContent()
+            {
+
+            }
+
+            @Override
+            public void drawBottomSheet()
+            {
+                if (ImGui.button("Cancel", 120.0f, 0.0f))
+                {
+                    this.listener.onCancelButton();
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.sameLine();
+
+                if (ImGui.button("Create", 120.0f, 0.0f))
+                {
+                    this.listener.onAcceptButton();
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.setItemDefaultFocus();
+            }
+
+        };
+    }
+
+    protected static Modal<String> fileDialog(String initialDirectory)
+    {
+        return new Modal<>("Project Manager", "Select the project directory")
+        {
+            private final int folderIcon = AssetsManager.getTexture(SystemIcon.folder).ID;
+            private final int fileIcon = AssetsManager.getTexture(SystemIcon.document).ID;
+            private final int leftIcon = AssetsManager.getTexture(SystemIcon.left).ID;
+            private final int rightIcon = AssetsManager.getTexture(SystemIcon.right).ID;
+            private final int refreshIcon = AssetsManager.getTexture(SystemIcon.refresh).ID;
+            private final String rootDirectory = initialDirectory;
+            private String currentDirectory = initialDirectory;
+            private Container<String> directoryTree;
+            private final ImString selectedFile = new ImString();
+
+            private String getFilename(String path)
+            {
+                return path.substring(path.lastIndexOf("\\") + 1);
+            }
+
+            private String getToPath(String path)
+            {
+                return path.substring(0, path.lastIndexOf("\\"));
+            }
+
+            private void reloadDirectory()
+            {
+                if(directoryTree != null && currentDirectory.equals(directoryTree.getValue()))
+                    return;
+
+                directoryTree = new Container<>(getFilename(this.currentDirectory), this.currentDirectory);
+
+                try(DirectoryStream<Path> stream = Files.newDirectoryStream(Paths.get(this.currentDirectory)))
+                {
+                    for(Path entry : stream)
+                    {
+                        String pathName = entry.getFileName().toString();
+                        String absolutePath = entry.toFile().getAbsolutePath();
+                        if(Files.isDirectory(entry))
+                            this.directoryTree.add(new Container<>(pathName, absolutePath));
+                        else
+                            this.directoryTree.add(new Contained<>(pathName, absolutePath));
+                    }
+                    directoryTree.sort();
+                }
+                catch (IOException ex)
+                {
+                    ex.printStackTrace();
+                }
+            }
+
+            @Override
+            public float getBottomHeight()
+            {
+                return 100.0f;
+            }
+
+            @Override
+            public void drawTopSheet()
+            {
+                reloadDirectory();
+                ImGui.sameLine(20.0f);
+
+                ImGui.pushStyleColor(ImGuiCol.Button, 0.0f, 0.0f, 0.0f, 0.0f);
+                ImGui.pushStyleColor(ImGuiCol.ButtonHovered, 0, 0, 0, 0);
+                ImGui.pushStyleColor(ImGuiCol.ButtonActive, 0.0f, 0.0f, 0.0f, 0.0f);
+                ImGui.pushStyleColor(ImGuiCol.Border, 0, 0, 0, 0);
+
+                float iconSize = 16.0f;
+
+                if(ImGui.imageButton(this.leftIcon, iconSize, iconSize, 0, 1, 1, 0))
+                {
+                    String previousDirectory = getToPath(this.currentDirectory);
+                    if(previousDirectory.length() >= this.rootDirectory.length())
+                    {
+                        this.currentDirectory = getToPath(this.currentDirectory);
+                        this.selectedFile.set("");
+                    }
+                }
+                ImGui.sameLine();
+
+                ImGui.imageButton(this.rightIcon, iconSize, iconSize, 0, 1, 1, 0);
+                ImGui.sameLine();
+
+                if(ImGui.imageButton(this.refreshIcon, iconSize, iconSize, 0, 1, 1, 0))
+                    reloadDirectory();
+                ImGui.sameLine();
+
+                ImGui.textWrapped("Path: " + this.currentDirectory);
+                ImGui.popStyleColor(4);
+            }
+
+            @Override
+            public void drawContent()
+            {
+                for(int i = 0; i < this.directoryTree.size(); ++i)
+                {
+                    Containable<String> containable = this.directoryTree.getItems().get(i);
+
+                    boolean isContainer = containable.isContainer();
+                    float iconSize = 32.0f;
+
+                    ImGui.pushStyleColor(ImGuiCol.Button, 0.0f, 0.0f, 0.0f, 0.0f);
+                    ImGui.pushStyleColor(ImGuiCol.ButtonHovered, 0, 0, 0, 0);
+                    ImGui.pushStyleColor(ImGuiCol.ButtonActive, 0.0f, 0.0f, 0.0f, 0.0f);
+                    ImGui.pushStyleColor(ImGuiCol.Border, 0, 0, 0, 0);
+                    ImGui.pushStyleColor(ImGuiCol.HeaderHovered, 20, 20, 20, 20);
+                    ImGui.pushStyleColor(ImGuiCol.HeaderActive, 0, 0, 0, 0);
+                    ImGui.pushStyleColor(ImGuiCol.Header, 0, 0, 0, 0);
+
+                    if(isContainer)
+                        ImGui.imageButton(this.folderIcon, iconSize, iconSize,    1, 0, 0, 1);
+                    else
+                        ImGui.imageButton(this.fileIcon, iconSize, iconSize, 0, 1, 1, 0);
+
+                    ImGui.sameLine();
+
+                    boolean isSelected = containable.getName().equals(this.selectedFile.get());
+                    if(ImGui.selectable(containable.getName(), isSelected, ImGuiSelectableFlags.AllowDoubleClick))
+                    {
+                        if(isContainer && ImGui.isMouseDoubleClicked(0))
+                        {
+                            this.currentDirectory = containable.getValue();
+                            this.selectedFile.set("");
+                        }
+                        else
+                            this.selectedFile.set(containable.getValue());
+                        this.selection = containable.getValue();
+                    }
+
+                    ImGui.popStyleColor(7);
+                }
+
+            }
+
+            @Override
+            public void drawBottomSheet()
+            {
+                ImGui.newLine();
+                ImGui.text("Filename:");
+                ImGui.sameLine();
+                ImVec2 size = ImGui.getContentRegionAvail();
+                ImGui.pushItemWidth(size.x - 30.0f);
+                ImGui.inputText("##label", new ImString(getFilename(this.selectedFile.get())));
+                ImGui.popItemWidth();
+                ImGui.spacing();
+                ImGui.spacing();
+
+                if (ImGui.button("Cancel", 120.0f, 0.0f))
+                {
+                    this.listener.onCancelButton();
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.sameLine();
+
+                if (ImGui.button("Select", 120.0f, 0.0f))
+                {
+                    this.listener.onAcceptButton();
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.setItemDefaultFocus();
+            }
+
+        };
+    }
+
+    protected static Notification engineNotification(int imageID)
+    {
+        return new Notification("Header", "A message", imageID)
+        {
+            @Override
+            public void drawBottomSheet()
+            {
+                if (ImGui.button("Cancel", 120.0f, 0.0f))
+                    this.isActive = false;
+            }
+        };
+    }
+
+    protected static Modal<String> newScene()
+    {
+        return new Modal<>("New Scene", "Add a new scene to your project", true)
+        {
+            private final ImString sceneName = new ImString();
+
+            @Override
+            public float getBottomHeight()
+            {
+                return 30.0f;
+            }
+
+            @Override
+            public void drawTopSheet()
+            {
+
+            }
+
+            @Override
+            public void drawContent()
+            {
+                ImGui.inputTextWithHint("##label", "Scene Name", this.sceneName);
+            }
+
+            @Override
+            public void drawBottomSheet()
+            {
+                ImGui.spacing();
+                if (ImGui.button("Cancel", 120.0f, 0.0f))
+                {
+                    this.sceneName.set("");
+                    this.listener.onCancelButton();
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.sameLine();
+
+                if (ImGui.button("Create", 120.0f, 0.0f))
+                {
+                    this.selection = this.sceneName.get();
+                    this.sceneName.set("");
+                    this.listener.onAcceptButton();
+                    ImGui.closeCurrentPopup();
+                }
+                ImGui.setItemDefaultFocus();
+            }
+        };
+    }
+}

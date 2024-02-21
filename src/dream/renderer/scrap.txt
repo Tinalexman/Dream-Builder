@@ -1,0 +1,180 @@
+package dream.renderer;
+
+import dream.assets.Material;
+import dream.camera.Camera;
+import dream.components.general.Transform;
+import dream.components.graphics.Mesh;
+import dream.constants.ShaderConstants;
+import dream.provider.LineProvider;
+import dream.provider.ParticleProvider;
+import dream.interfaces.Drawable;
+import dream.nodes.Node;
+import dream.shader.Shader;
+import dream.shape.Shape;
+import dream.managers.AssetsManager;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
+
+import java.util.List;
+
+import static org.lwjgl.opengl.GL33.*;
+
+public class NodeRenderer
+{
+    private final Shader outlineShader;
+    private final Shader blendShader;
+    public final Vector3f outlineColor;
+    private final PrimitivesRenderer renderer;
+    public float outlineSize;
+
+    public NodeRenderer()
+    {
+        this.outlineShader = AssetsManager.addAndGetShader("blankShader.glsl");
+        this.blendShader = AssetsManager.addAndGetShader("blendShader.glsl");
+        this.outlineColor = new Vector3f(0.7f, 0.75f, 0.1f);
+        this.renderer = new PrimitivesRenderer();
+        this.outlineSize = 1.05f;
+    }
+
+    public void initialize()
+    {
+        this.renderer.initialize();
+        try
+        {
+            this.outlineShader.storeUniforms(ShaderConstants.transformation, ShaderConstants.color,
+                    ShaderConstants.projection, ShaderConstants.view);
+            this.blendShader.storeUniforms(ShaderConstants.transformation,
+                    ShaderConstants.projection, ShaderConstants.view);
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+    public void destroy()
+    {
+        this.renderer.destroy();
+        this.outlineShader.destroy();
+        this.blendShader.destroy();
+    }
+
+    private void drawOutline(Camera camera, Transform transform, Matrix4f matrix, Mesh mesh)
+    {
+        glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
+        glStencilMask(0x00);
+        glDisable(GL_DEPTH_TEST);
+
+        Vector3f originalScale = new Vector3f(transform.scale);
+        transform.incrementScale(this.outlineSize, this.outlineSize, this.outlineSize);
+        transform.onChanged();
+
+        this.outlineShader.start();
+
+        this.outlineShader.loadUniform(ShaderConstants.color, this.outlineColor.x, this.outlineColor.y, this.outlineColor.z);
+        this.outlineShader.loadUniform(ShaderConstants.transformation, transform.getMatrix());
+        this.outlineShader.loadUniform(ShaderConstants.view, camera.getView());
+        this.outlineShader.loadUniform(ShaderConstants.projection, camera.getProjection());
+
+        mesh.onEnable();
+        if(mesh.getMeshIndices() != null)
+            glDrawElements(GL_TRIANGLES, mesh.getVertexCount(), GL_UNSIGNED_INT, 0);
+        else
+            glDrawArrays(GL_TRIANGLES, 0, mesh.getVertexCount());
+        mesh.onDisable();
+
+        transform.scale.set(originalScale);
+        transform.onChanged();
+
+        this.outlineShader.stop();
+
+        glStencilMask(0xFF);
+        glStencilFunc(GL_ALWAYS, 0, 0xFF);
+        glEnable(GL_DEPTH_TEST);
+    }
+
+
+
+    public void render(Camera camera, List<Node> nodes, Node selectedNode)
+    {
+         for(Node node : nodes)
+        {
+            if(!node.visible)
+                continue;
+
+            if(node instanceof Drawable drawable)
+            {
+                boolean shouldOutline  = false;
+
+                if(selectedNode instanceof Shape drawableNode)
+                {
+                    if(node.equals(drawableNode))
+                    {
+                        shouldOutline = true;
+                        glStencilFunc(GL_ALWAYS, 1, 0xFF);
+                        glStencilMask(0xFF);
+                    }
+                }
+                else
+                    glStencilMask(0x00);
+
+                try
+                {
+                    Transform transform = node.getTransform();
+                    Mesh mesh = drawable.getMesh();
+                    Material material = mesh.getMeshMaterial();
+
+                    boolean transparent = material.transparency;
+
+                    Shader shader = transparent ? this.blendShader : drawable.getShader();
+                    shader.start();
+
+                    Matrix4f matrix = SceneRenderer.getTotalTransform(node);
+                    shader.loadUniform(ShaderConstants.transformation, matrix);
+                    shader.loadUniform(ShaderConstants.view, camera.getView());
+                    shader.loadUniform(ShaderConstants.projection, camera.getProjection());
+
+                    if(transparent)
+                    {
+                        glEnable(GL_BLEND);
+                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                    }
+                    else
+                    {
+                        shader.loadUniform(ShaderConstants.viewPosition, camera.getPosition());
+                        shader.loadUniform(ShaderConstants.materialDiffuse, 0);
+                        shader.loadUniform(ShaderConstants.materialSpecular, 1);
+                        shader.loadUniform(ShaderConstants.materialReflectance, material.reflectance);
+                        glDisable(GL_BLEND);
+                    }
+
+                    mesh.onEnable();
+
+                    if(mesh.getMeshIndices() != null)
+                        glDrawElements(GL_TRIANGLES, mesh.getVertexCount(), GL_UNSIGNED_INT, 0);
+                    else
+                        glDrawArrays(GL_TRIANGLES, 0, mesh.getVertexCount());
+
+                    mesh.onDisable();
+                    shader.stop();
+
+                    if(shouldOutline)
+                        drawOutline(camera, transform, matrix, mesh);
+                    //TODO: Find a way to make sure that the calculated matrix
+                    // is being used when outlining or else the outline would be drawn elsewhere
+                }
+                catch (Exception ex)
+                {
+                    System.err.println(ex.getMessage());
+                    ex.printStackTrace();
+                }
+            }
+            else if(node instanceof ParticleProvider generator)
+                this.renderer.render(camera, generator);
+            else if(node instanceof LineProvider generator)
+                this.renderer.render(camera, generator);
+        }
+    }
+
+}
+
